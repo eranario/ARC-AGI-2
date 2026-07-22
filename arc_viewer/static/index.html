@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ARC-AGI-2 Latent Viewer</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --border: #2a3140;
+      --text: #e8ecf1;
+      --muted: #8b95a8;
+      --accent: #5b9fd4;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+    .app {
+      display: grid;
+      grid-template-rows: auto auto auto 1fr;
+      height: 100%;
+      min-height: 0;
+    }
+    .toolbar-stack { min-height: 0; }
+    header {
+      padding: 14px 18px 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 12px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 14px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font: inherit;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--text);
+      border-bottom-color: var(--accent);
+    }
+    .toolbar {
+      display: none;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+      background: #12151b;
+    }
+    .toolbar.visible { display: flex; }
+    .toolbar label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .toolbar.row-center { align-items: center; }
+    select, .chip, input[type="search"], button.action {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 10px;
+      font: inherit;
+    }
+    select { min-width: 180px; }
+    select[multiple] {
+      min-width: 220px;
+      height: 140px;
+      padding: 4px;
+    }
+    select[multiple] option {
+      padding: 3px 6px;
+      border-radius: 2px;
+    }
+    .chip {
+      color: var(--muted);
+      font-size: 12px;
+      align-self: center;
+    }
+    button.action {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 5px 8px;
+    }
+    button.action:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .task-picker {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .task-picker-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .panel-stack {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 1fr;
+    }
+    .panel {
+      display: none;
+      min-height: 0;
+      padding: 8px;
+    }
+    .panel.active {
+      display: grid;
+      grid-template-rows: 1fr;
+      min-height: 0;
+      height: 100%;
+    }
+    .plot {
+      width: 100%;
+      height: 100%;
+      min-height: 420px;
+    }
+    .error { color: #e07a7a; }
+    #grid-preview {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      pointer-events: none;
+      background: #12151b;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      min-width: 120px;
+      box-shadow: none;
+    }
+    #grid-preview.visible { display: block; }
+    #grid-preview .meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 6px;
+      line-height: 1.35;
+    }
+    #grid-preview canvas {
+      display: block;
+      image-rendering: pixelated;
+      border: 1px solid #2a3140;
+      background: #000;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>ARC-AGI-2 Latent Viewer</h1>
+      <p id="meta">Loading precomputed t-SNE…</p>
+    </header>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="grids">Grids in latent space</button>
+      <button class="tab" data-tab="pairs">Input → output mapping</button>
+    </div>
+
+    <div class="toolbar-stack">
+      <div id="toolbar-grids" class="toolbar visible row-center">
+        <label for="split-filter">Split</label>
+        <select id="split-filter">
+          <option value="all">all</option>
+        </select>
+        <label for="pair-type-filter">Pair type</label>
+        <select id="pair-type-filter">
+          <option value="all">all</option>
+          <option value="train" selected>train</option>
+          <option value="test">test</option>
+        </select>
+        <span class="chip" id="grids-count"></span>
+      </div>
+
+      <div id="toolbar-pairs" class="toolbar">
+        <div class="task-picker">
+          <label for="task-filter">Tasks (multi-select)</label>
+          <input id="task-filter" type="search" placeholder="Filter task ids…" />
+          <select id="task-select" multiple></select>
+          <div class="task-picker-actions">
+            <button type="button" class="action" id="task-select-visible">Select visible</button>
+            <button type="button" class="action" id="task-clear">Clear</button>
+          </div>
+        </div>
+        <span class="chip" id="pairs-count"></span>
+      </div>
+    </div>
+
+    <div class="panel-stack">
+      <section id="panel-grids" class="panel active">
+        <div id="plot-grids" class="plot"></div>
+      </section>
+      <section id="panel-pairs" class="panel">
+        <div id="plot-pairs" class="plot"></div>
+      </section>
+    </div>
+  </div>
+
+  <div id="grid-preview">
+    <div class="meta" id="grid-preview-meta"></div>
+    <canvas id="grid-preview-canvas"></canvas>
+  </div>
+
+  <script>
+    const ARC_COLORS = [
+      [0, 0, 0],
+      [0, 116, 217],
+      [255, 65, 54],
+      [46, 204, 64],
+      [255, 220, 0],
+      [170, 170, 170],
+      [240, 18, 190],
+      [255, 133, 27],
+      [127, 219, 255],
+      [135, 12, 37],
+    ];
+
+    const state = {
+      data: null,
+      tab: "grids",
+      colorCache: new Map(),
+      gridsPoints: [],
+      pairsPoints: [],
+      taskPairCounts: new Map(),
+    };
+
+    const previewEl = document.getElementById("grid-preview");
+    const previewMeta = document.getElementById("grid-preview-meta");
+    const previewCanvas = document.getElementById("grid-preview-canvas");
+    const previewCtx = previewCanvas.getContext("2d");
+
+    function hashHue(taskId) {
+      let h = 0;
+      for (let i = 0; i < taskId.length; i++) {
+        h = (h * 31 + taskId.charCodeAt(i)) >>> 0;
+      }
+      return h % 360;
+    }
+
+    function colorForTask(taskId, alpha = 0.85) {
+      const key = `${taskId}:${alpha}`;
+      if (state.colorCache.has(key)) return state.colorCache.get(key);
+      const hue = hashHue(taskId);
+      const color = `hsla(${hue}, 70%, 58%, ${alpha})`;
+      state.colorCache.set(key, color);
+      return color;
+    }
+
+    function drawGrid(grid) {
+      if (!grid || !grid.length || !grid[0].length) {
+        previewCanvas.width = 1;
+        previewCanvas.height = 1;
+        return;
+      }
+      const h = grid.length;
+      const w = grid[0].length;
+      const maxSide = 160;
+      const cell = Math.max(4, Math.floor(maxSide / Math.max(h, w)));
+      previewCanvas.width = w * cell;
+      previewCanvas.height = h * cell;
+      for (let r = 0; r < h; r++) {
+        for (let c = 0; c < w; c++) {
+          const color = ARC_COLORS[grid[r][c]] || ARC_COLORS[0];
+          previewCtx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+          previewCtx.fillRect(c * cell, r * cell, cell, cell);
+        }
+      }
+      previewCtx.strokeStyle = "rgba(255,255,255,0.12)";
+      previewCtx.lineWidth = 1;
+      for (let r = 0; r <= h; r++) {
+        previewCtx.beginPath();
+        previewCtx.moveTo(0, r * cell + 0.5);
+        previewCtx.lineTo(w * cell, r * cell + 0.5);
+        previewCtx.stroke();
+      }
+      for (let c = 0; c <= w; c++) {
+        previewCtx.beginPath();
+        previewCtx.moveTo(c * cell + 0.5, 0);
+        previewCtx.lineTo(c * cell + 0.5, h * cell);
+        previewCtx.stroke();
+      }
+    }
+
+    function showPreview(point, clientX, clientY) {
+      if (!point || !point.grid) {
+        hidePreview();
+        return;
+      }
+      previewMeta.innerHTML =
+        `<strong style="color:#e8ecf1">${point.task_id}</strong><br>` +
+        `${point.pair_type} #${point.pair_index} · ${point.io_type}<br>` +
+        `${point.height}×${point.width}`;
+      drawGrid(point.grid);
+      previewEl.classList.add("visible");
+
+      const pad = 14;
+      const rect = previewEl.getBoundingClientRect();
+      let left = clientX + pad;
+      let top = clientY + pad;
+      if (left + rect.width > window.innerWidth - 8) {
+        left = clientX - rect.width - pad;
+      }
+      if (top + rect.height > window.innerHeight - 8) {
+        top = clientY - rect.height - pad;
+      }
+      previewEl.style.left = `${Math.max(8, left)}px`;
+      previewEl.style.top = `${Math.max(8, top)}px`;
+    }
+
+    function hidePreview() {
+      previewEl.classList.remove("visible");
+    }
+
+    function bindHover(plotId, points) {
+      const gd = document.getElementById(plotId);
+      if (gd._arcHoverCleanup) gd._arcHoverCleanup();
+
+      const onMove = (ev) => {
+        if (!points.length || !gd._fullLayout) return;
+        const drag = gd.querySelector(".nsewdrag");
+        if (!drag) return;
+        const bbox = drag.getBoundingClientRect();
+        if (
+          ev.clientX < bbox.left ||
+          ev.clientX > bbox.right ||
+          ev.clientY < bbox.top ||
+          ev.clientY > bbox.bottom
+        ) {
+          hidePreview();
+          return;
+        }
+
+        const xaxis = gd._fullLayout.xaxis;
+        const yaxis = gd._fullLayout.yaxis;
+        const x = xaxis.p2d(ev.clientX - bbox.left);
+        const y = yaxis.p2d(ev.clientY - bbox.top);
+
+        // Distance measured in plot pixels; accept matches within ~14px.
+        const xScale = Math.abs(xaxis.p2d(1) - xaxis.p2d(0)) || 1;
+        const yScale = Math.abs(yaxis.p2d(1) - yaxis.p2d(0)) || 1;
+
+        let best = null;
+        let bestD = Infinity;
+        for (let i = 0; i < points.length; i++) {
+          const p = points[i];
+          const dx = (p.x - x) / xScale;
+          const dy = (p.y - y) / yScale;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) {
+            bestD = d;
+            best = p;
+          }
+        }
+
+        if (!best || bestD > 196) {
+          hidePreview();
+          return;
+        }
+        showPreview(best, ev.clientX, ev.clientY);
+      };
+
+      const onLeave = () => hidePreview();
+      gd.addEventListener("mousemove", onMove);
+      gd.addEventListener("mouseleave", onLeave);
+      gd._arcHoverCleanup = () => {
+        gd.removeEventListener("mousemove", onMove);
+        gd.removeEventListener("mouseleave", onLeave);
+        delete gd._arcHoverCleanup;
+      };
+    }
+
+    function setTab(tab) {
+      state.tab = tab;
+      hidePreview();
+      document.querySelectorAll(".tab").forEach((el) => {
+        el.classList.toggle("active", el.dataset.tab === tab);
+      });
+      document.getElementById("panel-grids").classList.toggle("active", tab === "grids");
+      document.getElementById("panel-pairs").classList.toggle("active", tab === "pairs");
+      document.getElementById("toolbar-grids").classList.toggle("visible", tab === "grids");
+      document.getElementById("toolbar-pairs").classList.toggle("visible", tab === "pairs");
+      if (tab === "grids") renderGrids();
+      else renderPairs();
+    }
+
+    function layoutBase(title) {
+      return {
+        title: { text: title, font: { size: 14, color: "#e8ecf1" }, x: 0.01, xanchor: "left" },
+        paper_bgcolor: "#0f1115",
+        plot_bgcolor: "#0f1115",
+        font: { color: "#c5ccd8", size: 12 },
+        margin: { l: 50, r: 20, t: 48, b: 48 },
+        xaxis: {
+          title: "t-SNE 1",
+          gridcolor: "#222833",
+          zerolinecolor: "#2a3140",
+          color: "#8b95a8",
+        },
+        yaxis: {
+          title: "t-SNE 2",
+          gridcolor: "#222833",
+          zerolinecolor: "#2a3140",
+          color: "#8b95a8",
+          scaleanchor: "x",
+          scaleratio: 1,
+        },
+        legend: { bgcolor: "rgba(0,0,0,0)", font: { size: 11 } },
+        hovermode: "closest",
+      };
+    }
+
+    function filteredPoints() {
+      const split = document.getElementById("split-filter").value;
+      const pairType = document.getElementById("pair-type-filter").value;
+      return state.data.points.filter((p) => {
+        if (split !== "all" && p.split !== split) return false;
+        if (pairType !== "all" && p.pair_type !== pairType) return false;
+        return true;
+      });
+    }
+
+    async function renderGrids() {
+      const points = filteredPoints();
+      state.gridsPoints = points;
+      document.getElementById("grids-count").textContent =
+        `${points.length.toLocaleString()} grids · hover to preview · color = task_id`;
+
+      const trace = {
+        type: "scatter",
+        mode: "markers",
+        x: points.map((p) => p.x),
+        y: points.map((p) => p.y),
+        customdata: points.map((_, i) => i),
+        text: points.map(
+          (p) => `${p.task_id} · ${p.pair_type} #${p.pair_index} ${p.io_type}`
+        ),
+        hoverinfo: "text",
+        hoverlabel: {
+          bgcolor: "#12151b",
+          bordercolor: "#2a3140",
+          font: { color: "#c5ccd8", size: 11 },
+        },
+        marker: {
+          size: 6,
+          color: points.map((p) => colorForTask(p.task_id, 0.75)),
+          line: { width: 0 },
+        },
+        name: "grids",
+        showlegend: false,
+      };
+
+      await Plotly.newPlot(
+        "plot-grids",
+        [trace],
+        layoutBase("Individual grids in t-SNE space (color = task_id)"),
+        { responsive: true, displayModeBar: true }
+      );
+      bindHover("plot-grids", state.gridsPoints);
+    }
+
+    function trainPairsForTask(taskId) {
+      const points = state.data.points.filter(
+        (p) => p.task_id === taskId && p.pair_type === "train"
+      );
+      const byIndex = new Map();
+      for (const p of points) {
+        if (!byIndex.has(p.pair_index)) byIndex.set(p.pair_index, {});
+        byIndex.get(p.pair_index)[p.io_type] = p;
+      }
+      return [...byIndex.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([pairIndex, ios]) => ({ pairIndex, taskId, ...ios }))
+        .filter((p) => p.input && p.output);
+    }
+
+    function selectedTaskIds() {
+      return [...document.getElementById("task-select").selectedOptions].map(
+        (o) => o.value
+      );
+    }
+
+    async function renderPairs() {
+      const taskIds = selectedTaskIds();
+      if (!taskIds.length) {
+        state.pairsPoints = [];
+        document.getElementById("pairs-count").textContent = "No tasks selected";
+        await Plotly.newPlot(
+          "plot-pairs",
+          [],
+          layoutBase("Select one or more tasks to view input → output mappings"),
+          { responsive: true, displayModeBar: true }
+        );
+        return;
+      }
+
+      const allPairs = taskIds.flatMap((id) => trainPairsForTask(id));
+      const totalPairs = allPairs.length;
+      document.getElementById("pairs-count").textContent =
+        `${taskIds.length} task${taskIds.length === 1 ? "" : "s"} · ` +
+        `${totalPairs} train pair${totalPairs === 1 ? "" : "s"} · hover to preview`;
+
+      const showLabels = totalPairs <= 24;
+      const lineTraces = [];
+      const inputPoints = [];
+      const outputPoints = [];
+
+      for (const pair of allPairs) {
+        const inp = pair.input;
+        const out = pair.output;
+        const taskColor = colorForTask(pair.taskId, 0.9);
+        lineTraces.push({
+          type: "scatter",
+          mode: "lines",
+          x: [inp.x, out.x],
+          y: [inp.y, out.y],
+          line: { color: taskColor, width: 1.5, dash: "dash" },
+          hoverinfo: "skip",
+          showlegend: false,
+        });
+        inputPoints.push(inp);
+        outputPoints.push(out);
+      }
+
+      state.pairsPoints = [...inputPoints, ...outputPoints];
+
+      const traces = [
+        ...lineTraces,
+        {
+          type: "scatter",
+          mode: showLabels ? "markers+text" : "markers",
+          name: "input",
+          x: inputPoints.map((p) => p.x),
+          y: inputPoints.map((p) => p.y),
+          customdata: inputPoints.map((_, i) => i),
+          text: inputPoints.map((p) =>
+            taskIds.length > 1 ? `${p.task_id.slice(0, 4)}:${p.pair_index}` : String(p.pair_index)
+          ),
+          textposition: "top center",
+          textfont: { size: 10, color: "#c5ccd8" },
+          hoverinfo: "text",
+          hovertext: inputPoints.map(
+            (p) => `${p.task_id} · train #${p.pair_index} input`
+          ),
+          hoverlabel: {
+            bgcolor: "#12151b",
+            bordercolor: "#2a3140",
+            font: { color: "#c5ccd8", size: 11 },
+          },
+          marker: {
+            size: 11,
+            color: inputPoints.map((p) => colorForTask(p.task_id, 0.95)),
+            symbol: "circle",
+            line: { width: 1, color: "#0f1115" },
+          },
+        },
+        {
+          type: "scatter",
+          mode: showLabels ? "markers+text" : "markers",
+          name: "output",
+          x: outputPoints.map((p) => p.x),
+          y: outputPoints.map((p) => p.y),
+          customdata: outputPoints.map((_, i) => inputPoints.length + i),
+          text: outputPoints.map((p) =>
+            taskIds.length > 1 ? `${p.task_id.slice(0, 4)}:${p.pair_index}` : String(p.pair_index)
+          ),
+          textposition: "top center",
+          textfont: { size: 10, color: "#c5ccd8" },
+          hoverinfo: "text",
+          hovertext: outputPoints.map(
+            (p) => `${p.task_id} · train #${p.pair_index} output`
+          ),
+          hoverlabel: {
+            bgcolor: "#12151b",
+            bordercolor: "#2a3140",
+            font: { color: "#c5ccd8", size: 11 },
+          },
+          marker: {
+            size: 11,
+            color: outputPoints.map((p) => colorForTask(p.task_id, 0.95)),
+            symbol: "diamond",
+            line: { width: 1, color: "#0f1115" },
+          },
+        },
+      ];
+
+      const title =
+        taskIds.length === 1
+          ? `Input → output mapping for task ${taskIds[0]}`
+          : `Input → output mapping for ${taskIds.length} tasks`;
+
+      const layout = layoutBase(`${title} (dashed = pair link)`);
+      layout.annotations = [
+        {
+          text: "circle = input · diamond = output · color = task_id",
+          xref: "paper",
+          yref: "paper",
+          x: 0,
+          y: 1.08,
+          showarrow: false,
+          font: { size: 11, color: "#8b95a8" },
+        },
+      ];
+
+      await Plotly.newPlot("plot-pairs", traces, layout, {
+        responsive: true,
+        displayModeBar: true,
+      });
+      bindHover("plot-pairs", state.pairsPoints);
+    }
+
+    function applyTaskFilter() {
+      const q = document.getElementById("task-filter").value.trim().toLowerCase();
+      const select = document.getElementById("task-select");
+      for (const opt of select.options) {
+        opt.hidden = q.length > 0 && !opt.value.toLowerCase().includes(q);
+      }
+    }
+
+    function populateControls(data) {
+      const splits = [...new Set(data.points.map((p) => p.split))].sort();
+      const splitSelect = document.getElementById("split-filter");
+      for (const s of splits) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        splitSelect.appendChild(opt);
+      }
+
+      state.taskPairCounts = new Map(
+        data.task_ids.map((id) => [id, trainPairsForTask(id).length])
+      );
+
+      const taskSelect = document.getElementById("task-select");
+      taskSelect.innerHTML = "";
+      for (const id of data.task_ids) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = `${id} (${state.taskPairCounts.get(id)} pairs)`;
+        taskSelect.appendChild(opt);
+      }
+      if (taskSelect.options.length) {
+        taskSelect.options[0].selected = true;
+      }
+
+      const m = data.meta;
+      const gridNote = m.has_grids ? "" : " · grids missing (re-run --precompute)";
+      document.getElementById("meta").textContent =
+        `${m.n_points.toLocaleString()} grids · ${m.n_tasks.toLocaleString()} tasks · ` +
+        `${m.method} · pca=${m.pca_dims} · perplexity=${m.perplexity} · ` +
+        `splits=${m.splits.join(",")}${gridNote}`;
+    }
+
+    async function main() {
+      try {
+        const res = await fetch("/data/tsne.json");
+        if (!res.ok) throw new Error(`Failed to load data (${res.status})`);
+        state.data = await res.json();
+        populateControls(state.data);
+
+        document.querySelectorAll(".tab").forEach((btn) => {
+          btn.addEventListener("click", () => setTab(btn.dataset.tab));
+        });
+        document.getElementById("split-filter").addEventListener("change", renderGrids);
+        document.getElementById("pair-type-filter").addEventListener("change", renderGrids);
+        document.getElementById("task-select").addEventListener("change", renderPairs);
+        document.getElementById("task-filter").addEventListener("input", applyTaskFilter);
+        document.getElementById("task-clear").addEventListener("click", () => {
+          const select = document.getElementById("task-select");
+          for (const opt of select.options) opt.selected = false;
+          renderPairs();
+        });
+        document.getElementById("task-select-visible").addEventListener("click", () => {
+          const select = document.getElementById("task-select");
+          for (const opt of select.options) {
+            if (!opt.hidden) opt.selected = true;
+          }
+          renderPairs();
+        });
+
+        renderGrids();
+        window.addEventListener("resize", () => {
+          hidePreview();
+          if (state.tab === "grids") Plotly.Plots.resize("plot-grids");
+          else Plotly.Plots.resize("plot-pairs");
+        });
+      } catch (err) {
+        document.getElementById("meta").innerHTML =
+          `<span class="error">${err.message}. Run: uv run python main.py viewer --precompute</span>`;
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>
