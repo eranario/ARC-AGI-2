@@ -16,3 +16,11 @@ visual = [
     "torch",
     "torchvision",
 ]
+dino = [
+    "torch",
+    "torchvision",
+    "transformers>=4.56.0",
+    "accelerate",
+    "huggingface-hub",
+    "safetensors",
+]

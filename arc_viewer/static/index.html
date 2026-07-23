@@ -90,7 +90,11 @@
       padding: 6px 10px;
       font: inherit;
     }
-    select { min-width: 180px; }
+    select { min-width: 150px; }
+    select:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
     select[multiple] {
       min-width: 220px;
       height: 140px;
@@ -115,6 +119,26 @@
       color: var(--text);
       border-color: var(--accent);
     }
+    .check-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+    }
+    .check-label input { accent-color: var(--accent); }
+    .check-label.disabled {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+    .compare-controls {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .compare-controls.visible { display: inline-flex; }
     .task-picker {
       display: flex;
       flex-direction: column;
@@ -141,10 +165,35 @@
       min-height: 0;
       height: 100%;
     }
+    .plot-row {
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+      height: 100%;
+      grid-template-columns: 1fr;
+    }
+    .plot-pane {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 0;
+      min-width: 0;
+      border: 1px solid var(--border);
+      background: #10131a;
+    }
+    .plot-pane-label {
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: #12151b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .plot {
       width: 100%;
       height: 100%;
-      min-height: 420px;
+      min-height: 280px;
     }
     .error { color: #e07a7a; }
     #grid-preview {
@@ -157,7 +206,6 @@
       border-radius: 6px;
       padding: 8px;
       min-width: 120px;
-      box-shadow: none;
     }
     #grid-preview.visible { display: block; }
     #grid-preview .meta {
@@ -184,10 +232,23 @@
     <div class="tabs">
       <button class="tab active" data-tab="grids">Grids in latent space</button>
       <button class="tab" data-tab="pairs">Input → output mapping</button>
+      <button class="tab" data-tab="traj" id="tab-traj" hidden>I/O trajectories</button>
     </div>
 
     <div class="toolbar-stack">
       <div id="toolbar-grids" class="toolbar visible row-center">
+        <label for="grids-embedding">Embedding</label>
+        <select id="grids-embedding"></select>
+        <label class="check-label" id="grids-split-label" title="Needs at least 2 embedding sources">
+          <input type="checkbox" id="grids-split" />
+          Split compare
+        </label>
+        <div class="compare-controls" id="grids-compare-controls">
+          <label for="grids-left">A</label>
+          <select id="grids-left"></select>
+          <label for="grids-right">B</label>
+          <select id="grids-right"></select>
+        </div>
         <label for="split-filter">Split</label>
         <select id="split-filter">
           <option value="all">all</option>
@@ -203,6 +264,18 @@
 
       <div id="toolbar-pairs" class="toolbar">
         <div class="task-picker">
+          <label for="pairs-embedding">Embedding</label>
+          <select id="pairs-embedding"></select>
+          <label class="check-label" id="pairs-split-label" title="Needs at least 2 embedding sources">
+            <input type="checkbox" id="pairs-split" />
+            Split compare
+          </label>
+          <div class="compare-controls" id="pairs-compare-controls">
+            <label for="pairs-left">A</label>
+            <select id="pairs-left"></select>
+            <label for="pairs-right">B</label>
+            <select id="pairs-right"></select>
+          </div>
           <label for="task-filter">Tasks (multi-select)</label>
           <input id="task-filter" type="search" placeholder="Filter task ids…" />
           <select id="task-select" multiple></select>
@@ -213,21 +286,49 @@
         </div>
         <span class="chip" id="pairs-count"></span>
       </div>
+
+      <div id="toolbar-traj" class="toolbar row-center">
+        <label for="traj-embedding">Embedding</label>
+        <select id="traj-embedding"></select>
+        <label class="check-label" id="traj-split-label" title="Needs at least 2 trajectory sources">
+          <input type="checkbox" id="traj-split" />
+          Split compare
+        </label>
+        <div class="compare-controls" id="traj-compare-controls">
+          <label for="traj-left">A</label>
+          <select id="traj-left"></select>
+          <label for="traj-right">B</label>
+          <select id="traj-right"></select>
+        </div>
+        <span class="chip" id="traj-count"></span>
+      </div>
     </div>
 
     <div class="panel-stack">
       <section id="panel-grids" class="panel active">
-        <div id="plot-grids" class="plot"></div>
+        <div class="plot-row" id="grids-plot-row"></div>
       </section>
       <section id="panel-pairs" class="panel">
-        <div id="plot-pairs" class="plot"></div>
+        <div class="plot-row" id="pairs-plot-row"></div>
+      </section>
+      <section id="panel-traj" class="panel">
+        <div class="plot-row" id="traj-plot-row"></div>
       </section>
     </div>
   </div>
 
   <div id="grid-preview">
     <div class="meta" id="grid-preview-meta"></div>
-    <canvas id="grid-preview-canvas"></canvas>
+    <div id="grid-preview-grids" style="display:flex;gap:8px;align-items:flex-start;">
+      <div>
+        <div class="meta" id="grid-preview-in-label" style="margin-bottom:4px;">input</div>
+        <canvas id="grid-preview-canvas"></canvas>
+      </div>
+      <div id="grid-preview-out-wrap" hidden>
+        <div class="meta" id="grid-preview-out-label" style="margin-bottom:4px;">output</div>
+        <canvas id="grid-preview-canvas-out"></canvas>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -245,11 +346,13 @@
     ];
 
     const state = {
-      data: null,
       tab: "grids",
+      sources: [],          // grid catalog
+      datasets: {},         // id -> grid JSON
+      trajSources: [],      // trajectory catalog
+      trajDatasets: {},     // id -> traj JSON
       colorCache: new Map(),
-      gridsPoints: [],
-      pairsPoints: [],
+      hoverPoints: {},      // plotId -> points
       taskPairCounts: new Map(),
     };
 
@@ -257,6 +360,23 @@
     const previewMeta = document.getElementById("grid-preview-meta");
     const previewCanvas = document.getElementById("grid-preview-canvas");
     const previewCtx = previewCanvas.getContext("2d");
+    const previewOutWrap = document.getElementById("grid-preview-out-wrap");
+    const previewCanvasOut = document.getElementById("grid-preview-canvas-out");
+    const previewCtxOut = previewCanvasOut.getContext("2d");
+
+    function availableSources() {
+      return state.sources.filter((s) => s.available && state.datasets[s.id]);
+    }
+
+    function availableTrajSources() {
+      return state.trajSources.filter((s) => s.available && state.trajDatasets[s.id]);
+    }
+
+    function sourceLabel(id, kind = "grids") {
+      const list = kind === "trajectories" ? state.trajSources : state.sources;
+      const src = list.find((s) => s.id === id);
+      return src?.label || id;
+    }
 
     function hashHue(taskId) {
       let h = 0;
@@ -269,69 +389,84 @@
     function colorForTask(taskId, alpha = 0.85) {
       const key = `${taskId}:${alpha}`;
       if (state.colorCache.has(key)) return state.colorCache.get(key);
-      const hue = hashHue(taskId);
-      const color = `hsla(${hue}, 70%, 58%, ${alpha})`;
+      const color = `hsla(${hashHue(taskId)}, 70%, 58%, ${alpha})`;
       state.colorCache.set(key, color);
       return color;
     }
 
-    function drawGrid(grid) {
+    function drawGridOn(ctx, canvas, grid) {
       if (!grid || !grid.length || !grid[0].length) {
-        previewCanvas.width = 1;
-        previewCanvas.height = 1;
+        canvas.width = 1;
+        canvas.height = 1;
         return;
       }
       const h = grid.length;
       const w = grid[0].length;
-      const maxSide = 160;
+      const maxSide = 140;
       const cell = Math.max(4, Math.floor(maxSide / Math.max(h, w)));
-      previewCanvas.width = w * cell;
-      previewCanvas.height = h * cell;
+      canvas.width = w * cell;
+      canvas.height = h * cell;
       for (let r = 0; r < h; r++) {
         for (let c = 0; c < w; c++) {
           const color = ARC_COLORS[grid[r][c]] || ARC_COLORS[0];
-          previewCtx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
-          previewCtx.fillRect(c * cell, r * cell, cell, cell);
+          ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+          ctx.fillRect(c * cell, r * cell, cell, cell);
         }
       }
-      previewCtx.strokeStyle = "rgba(255,255,255,0.12)";
-      previewCtx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
       for (let r = 0; r <= h; r++) {
-        previewCtx.beginPath();
-        previewCtx.moveTo(0, r * cell + 0.5);
-        previewCtx.lineTo(w * cell, r * cell + 0.5);
-        previewCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, r * cell + 0.5);
+        ctx.lineTo(w * cell, r * cell + 0.5);
+        ctx.stroke();
       }
       for (let c = 0; c <= w; c++) {
-        previewCtx.beginPath();
-        previewCtx.moveTo(c * cell + 0.5, 0);
-        previewCtx.lineTo(c * cell + 0.5, h * cell);
-        previewCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(c * cell + 0.5, 0);
+        ctx.lineTo(c * cell + 0.5, h * cell);
+        ctx.stroke();
       }
     }
 
     function showPreview(point, clientX, clientY) {
-      if (!point || !point.grid) {
+      if (!point) {
         hidePreview();
         return;
       }
-      previewMeta.innerHTML =
-        `<strong style="color:#e8ecf1">${point.task_id}</strong><br>` +
-        `${point.pair_type} #${point.pair_index} · ${point.io_type}<br>` +
-        `${point.height}×${point.width}`;
-      drawGrid(point.grid);
-      previewEl.classList.add("visible");
 
+      const isTraj = !!(point.input && point.output);
+      if (isTraj) {
+        previewMeta.innerHTML =
+          `<strong style="color:#e8ecf1">${point.task_id}</strong><br>` +
+          `${point.pair_type} #${point.pair_index} · |Δ|=${point.magnitude ?? "?"}`;
+        document.getElementById("grid-preview-in-label").textContent =
+          `input ${point.input.height}×${point.input.width}`;
+        document.getElementById("grid-preview-out-label").textContent =
+          `output ${point.output.height}×${point.output.width}`;
+        drawGridOn(previewCtx, previewCanvas, point.input.grid);
+        drawGridOn(previewCtxOut, previewCanvasOut, point.output.grid);
+        previewOutWrap.hidden = false;
+      } else if (point.grid) {
+        previewMeta.innerHTML =
+          `<strong style="color:#e8ecf1">${point.task_id}</strong><br>` +
+          `${point.pair_type} #${point.pair_index} · ${point.io_type}<br>` +
+          `${point.height}×${point.width}`;
+        document.getElementById("grid-preview-in-label").textContent = point.io_type || "grid";
+        drawGridOn(previewCtx, previewCanvas, point.grid);
+        previewOutWrap.hidden = true;
+      } else {
+        hidePreview();
+        return;
+      }
+
+      previewEl.classList.add("visible");
       const pad = 14;
       const rect = previewEl.getBoundingClientRect();
       let left = clientX + pad;
       let top = clientY + pad;
-      if (left + rect.width > window.innerWidth - 8) {
-        left = clientX - rect.width - pad;
-      }
-      if (top + rect.height > window.innerHeight - 8) {
-        top = clientY - rect.height - pad;
-      }
+      if (left + rect.width > window.innerWidth - 8) left = clientX - rect.width - pad;
+      if (top + rect.height > window.innerHeight - 8) top = clientY - rect.height - pad;
       previewEl.style.left = `${Math.max(8, left)}px`;
       previewEl.style.top = `${Math.max(8, top)}px`;
     }
@@ -342,36 +477,32 @@
 
     function bindHover(plotId, points) {
       const gd = document.getElementById(plotId);
+      if (!gd) return;
       if (gd._arcHoverCleanup) gd._arcHoverCleanup();
+      state.hoverPoints[plotId] = points;
 
       const onMove = (ev) => {
-        if (!points.length || !gd._fullLayout) return;
+        const pts = state.hoverPoints[plotId] || [];
+        if (!pts.length || !gd._fullLayout) return;
         const drag = gd.querySelector(".nsewdrag");
         if (!drag) return;
         const bbox = drag.getBoundingClientRect();
         if (
-          ev.clientX < bbox.left ||
-          ev.clientX > bbox.right ||
-          ev.clientY < bbox.top ||
-          ev.clientY > bbox.bottom
+          ev.clientX < bbox.left || ev.clientX > bbox.right ||
+          ev.clientY < bbox.top || ev.clientY > bbox.bottom
         ) {
           hidePreview();
           return;
         }
-
         const xaxis = gd._fullLayout.xaxis;
         const yaxis = gd._fullLayout.yaxis;
         const x = xaxis.p2d(ev.clientX - bbox.left);
         const y = yaxis.p2d(ev.clientY - bbox.top);
-
-        // Distance measured in plot pixels; accept matches within ~14px.
         const xScale = Math.abs(xaxis.p2d(1) - xaxis.p2d(0)) || 1;
         const yScale = Math.abs(yaxis.p2d(1) - yaxis.p2d(0)) || 1;
-
         let best = null;
         let bestD = Infinity;
-        for (let i = 0; i < points.length; i++) {
-          const p = points[i];
+        for (const p of pts) {
           const dx = (p.x - x) / xScale;
           const dy = (p.y - y) / yScale;
           const d = dx * dx + dy * dy;
@@ -380,14 +511,12 @@
             best = p;
           }
         }
-
         if (!best || bestD > 196) {
           hidePreview();
           return;
         }
         showPreview(best, ev.clientX, ev.clientY);
       };
-
       const onLeave = () => hidePreview();
       gd.addEventListener("mousemove", onMove);
       gd.addEventListener("mouseleave", onLeave);
@@ -398,27 +527,13 @@
       };
     }
 
-    function setTab(tab) {
-      state.tab = tab;
-      hidePreview();
-      document.querySelectorAll(".tab").forEach((el) => {
-        el.classList.toggle("active", el.dataset.tab === tab);
-      });
-      document.getElementById("panel-grids").classList.toggle("active", tab === "grids");
-      document.getElementById("panel-pairs").classList.toggle("active", tab === "pairs");
-      document.getElementById("toolbar-grids").classList.toggle("visible", tab === "grids");
-      document.getElementById("toolbar-pairs").classList.toggle("visible", tab === "pairs");
-      if (tab === "grids") renderGrids();
-      else renderPairs();
-    }
-
     function layoutBase(title) {
       return {
-        title: { text: title, font: { size: 14, color: "#e8ecf1" }, x: 0.01, xanchor: "left" },
-        paper_bgcolor: "#0f1115",
-        plot_bgcolor: "#0f1115",
-        font: { color: "#c5ccd8", size: 12 },
-        margin: { l: 50, r: 20, t: 48, b: 48 },
+        title: { text: title, font: { size: 13, color: "#e8ecf1" }, x: 0.01, xanchor: "left" },
+        paper_bgcolor: "#10131a",
+        plot_bgcolor: "#10131a",
+        font: { color: "#c5ccd8", size: 11 },
+        margin: { l: 46, r: 16, t: 44, b: 42 },
         xaxis: {
           title: "t-SNE 1",
           gridcolor: "#222833",
@@ -438,30 +553,153 @@
       };
     }
 
-    function filteredPoints() {
+    function filteredPoints(data) {
       const split = document.getElementById("split-filter").value;
       const pairType = document.getElementById("pair-type-filter").value;
-      return state.data.points.filter((p) => {
+      return data.points.filter((p) => {
         if (split !== "all" && p.split !== split) return false;
         if (pairType !== "all" && p.pair_type !== pairType) return false;
         return true;
       });
     }
 
-    async function renderGrids() {
-      const points = filteredPoints();
-      state.gridsPoints = points;
-      document.getElementById("grids-count").textContent =
-        `${points.length.toLocaleString()} grids · hover to preview · color = task_id`;
+    function fillSourceSelect(select, sources, datasets, { preferred } = {}) {
+      const prev = preferred ?? select.value;
+      select.innerHTML = "";
+      for (const src of sources) {
+        const opt = document.createElement("option");
+        opt.value = src.id;
+        const ready = src.available && datasets[src.id];
+        opt.textContent = ready ? src.label : `${src.label} (unavailable)`;
+        opt.disabled = !ready;
+        select.appendChild(opt);
+      }
+      if ([...select.options].some((o) => o.value === prev && !o.disabled)) {
+        select.value = prev;
+      } else if (select.options.length) {
+        const first = [...select.options].find((o) => !o.disabled);
+        if (first) select.value = first.value;
+      }
+    }
 
+    function syncSourceControls() {
+      const avail = availableSources();
+      const canSplit = avail.length >= 2;
+      const trajAvail = availableTrajSources();
+      const canTrajSplit = trajAvail.length >= 2;
+
+      for (const prefix of ["grids", "pairs"]) {
+        fillSourceSelect(
+          document.getElementById(`${prefix}-embedding`),
+          state.sources,
+          state.datasets
+        );
+        fillSourceSelect(
+          document.getElementById(`${prefix}-left`),
+          state.sources,
+          state.datasets,
+          { preferred: document.getElementById(`${prefix}-left`).value || "structural" }
+        );
+        fillSourceSelect(
+          document.getElementById(`${prefix}-right`),
+          state.sources,
+          state.datasets,
+          {
+            preferred:
+              document.getElementById(`${prefix}-right`).value ||
+              avail.find((s) => s.id !== "structural")?.id ||
+              avail[1]?.id,
+          }
+        );
+        const splitLabel = document.getElementById(`${prefix}-split-label`);
+        const splitBox = document.getElementById(`${prefix}-split`);
+        splitLabel.classList.toggle("disabled", !canSplit);
+        splitBox.disabled = !canSplit;
+        if (!canSplit) splitBox.checked = false;
+        updateCompareVisibility(prefix);
+      }
+
+      fillSourceSelect(
+        document.getElementById("traj-embedding"),
+        state.trajSources,
+        state.trajDatasets
+      );
+      fillSourceSelect(
+        document.getElementById("traj-left"),
+        state.trajSources,
+        state.trajDatasets,
+        { preferred: document.getElementById("traj-left").value || "structural" }
+      );
+      fillSourceSelect(
+        document.getElementById("traj-right"),
+        state.trajSources,
+        state.trajDatasets,
+        {
+          preferred:
+            document.getElementById("traj-right").value ||
+            trajAvail.find((s) => s.id !== "structural")?.id ||
+            trajAvail[1]?.id,
+        }
+      );
+      const trajSplitLabel = document.getElementById("traj-split-label");
+      const trajSplitBox = document.getElementById("traj-split");
+      trajSplitLabel.classList.toggle("disabled", !canTrajSplit);
+      trajSplitBox.disabled = !canTrajSplit;
+      if (!canTrajSplit) trajSplitBox.checked = false;
+      updateCompareVisibility("traj");
+
+      document.getElementById("tab-traj").hidden = trajAvail.length === 0;
+    }
+
+    function updateCompareVisibility(prefix) {
+      const splitOn = document.getElementById(`${prefix}-split`).checked;
+      document.getElementById(`${prefix}-compare-controls`).classList.toggle("visible", splitOn);
+      document.getElementById(`${prefix}-embedding`).disabled = splitOn;
+    }
+
+    /** Source ids currently shown as panes for a tab. Length >= 1. */
+    function paneSourceIds(prefix) {
+      const isTraj = prefix === "traj";
+      const datasets = isTraj ? state.trajDatasets : state.datasets;
+      const fallback = isTraj ? availableTrajSources() : availableSources();
+      if (document.getElementById(`${prefix}-split`).checked) {
+        const left = document.getElementById(`${prefix}-left`).value;
+        const right = document.getElementById(`${prefix}-right`).value;
+        return [...new Set([left, right].filter((id) => datasets[id]))];
+      }
+      const id = document.getElementById(`${prefix}-embedding`).value;
+      return datasets[id] ? [id] : fallback.slice(0, 1).map((s) => s.id);
+    }
+
+    function ensurePanes(rowId, sourceIds, kind = "grids") {
+      const row = document.getElementById(rowId);
+      row.style.gridTemplateColumns = `repeat(${Math.max(sourceIds.length, 1)}, 1fr)`;
+      row.innerHTML = "";
+      return sourceIds.map((sourceId, i) => {
+        const pane = document.createElement("div");
+        pane.className = "plot-pane";
+        const label = document.createElement("div");
+        label.className = "plot-pane-label";
+        label.textContent = sourceLabel(sourceId, kind);
+        const plot = document.createElement("div");
+        plot.className = "plot";
+        plot.id = `${rowId}-plot-${i}`;
+        pane.appendChild(label);
+        pane.appendChild(plot);
+        row.appendChild(pane);
+        return plot.id;
+      });
+    }
+
+    async function plotScatter(plotId, points, title, { hoverText } = {}) {
       const trace = {
         type: "scatter",
         mode: "markers",
         x: points.map((p) => p.x),
         y: points.map((p) => p.y),
-        customdata: points.map((_, i) => i),
         text: points.map(
-          (p) => `${p.task_id} · ${p.pair_type} #${p.pair_index} ${p.io_type}`
+          hoverText ||
+            ((p) => `${p.task_id} · ${p.pair_type} #${p.pair_index} ${p.io_type || ""}`.trim())
         ),
         hoverinfo: "text",
         hoverlabel: {
@@ -474,21 +712,40 @@
           color: points.map((p) => colorForTask(p.task_id, 0.75)),
           line: { width: 0 },
         },
-        name: "grids",
         showlegend: false,
       };
-
-      await Plotly.newPlot(
-        "plot-grids",
-        [trace],
-        layoutBase("Individual grids in t-SNE space (color = task_id)"),
-        { responsive: true, displayModeBar: true }
-      );
-      bindHover("plot-grids", state.gridsPoints);
+      await Plotly.newPlot(plotId, [trace], layoutBase(title), {
+        responsive: true,
+        displayModeBar: true,
+      });
+      bindHover(plotId, points);
     }
 
-    function trainPairsForTask(taskId) {
-      const points = state.data.points.filter(
+    async function renderGrids() {
+      updateCompareVisibility("grids");
+      const ids = paneSourceIds("grids");
+      const plotIds = ensurePanes("grids-plot-row", ids);
+      const counts = [];
+      await Promise.all(
+        ids.map(async (sourceId, i) => {
+          const data = state.datasets[sourceId];
+          const points = filteredPoints(data);
+          counts.push(points.length);
+          await plotScatter(
+            plotIds[i],
+            points,
+            `${sourceLabel(sourceId)} → PCA → t-SNE`
+          );
+        })
+      );
+      const labels = ids.map(sourceLabel).join(" | ");
+      document.getElementById("grids-count").textContent = ids.length > 1
+        ? `${counts[0]?.toLocaleString() ?? 0} grids · compare: ${labels}`
+        : `${counts[0]?.toLocaleString() ?? 0} grids · ${labels}`;
+    }
+
+    function trainPairsForTask(taskId, data) {
+      const points = data.points.filter(
         (p) => p.task_id === taskId && p.pair_type === "train"
       );
       const byIndex = new Map();
@@ -508,50 +765,26 @@
       );
     }
 
-    async function renderPairs() {
-      const taskIds = selectedTaskIds();
-      if (!taskIds.length) {
-        state.pairsPoints = [];
-        document.getElementById("pairs-count").textContent = "No tasks selected";
-        await Plotly.newPlot(
-          "plot-pairs",
-          [],
-          layoutBase("Select one or more tasks to view input → output mappings"),
-          { responsive: true, displayModeBar: true }
-        );
-        return;
-      }
-
-      const allPairs = taskIds.flatMap((id) => trainPairsForTask(id));
-      const totalPairs = allPairs.length;
-      document.getElementById("pairs-count").textContent =
-        `${taskIds.length} task${taskIds.length === 1 ? "" : "s"} · ` +
-        `${totalPairs} train pair${totalPairs === 1 ? "" : "s"} · hover to preview`;
-
-      const showLabels = totalPairs <= 24;
+    function buildPairTraces(allPairs, taskIds) {
+      const showLabels = allPairs.length <= 24;
       const lineTraces = [];
       const inputPoints = [];
       const outputPoints = [];
-
       for (const pair of allPairs) {
-        const inp = pair.input;
-        const out = pair.output;
         const taskColor = colorForTask(pair.taskId, 0.9);
         lineTraces.push({
           type: "scatter",
           mode: "lines",
-          x: [inp.x, out.x],
-          y: [inp.y, out.y],
+          x: [pair.input.x, pair.output.x],
+          y: [pair.input.y, pair.output.y],
           line: { color: taskColor, width: 1.5, dash: "dash" },
           hoverinfo: "skip",
           showlegend: false,
         });
-        inputPoints.push(inp);
-        outputPoints.push(out);
+        inputPoints.push(pair.input);
+        outputPoints.push(pair.output);
       }
-
-      state.pairsPoints = [...inputPoints, ...outputPoints];
-
+      const points = [...inputPoints, ...outputPoints];
       const traces = [
         ...lineTraces,
         {
@@ -570,11 +803,6 @@
           hovertext: inputPoints.map(
             (p) => `${p.task_id} · train #${p.pair_index} input`
           ),
-          hoverlabel: {
-            bgcolor: "#12151b",
-            bordercolor: "#2a3140",
-            font: { color: "#c5ccd8", size: 11 },
-          },
           marker: {
             size: 11,
             color: inputPoints.map((p) => colorForTask(p.task_id, 0.95)),
@@ -598,11 +826,6 @@
           hovertext: outputPoints.map(
             (p) => `${p.task_id} · train #${p.pair_index} output`
           ),
-          hoverlabel: {
-            bgcolor: "#12151b",
-            bordercolor: "#2a3140",
-            font: { color: "#c5ccd8", size: 11 },
-          },
           marker: {
             size: 11,
             color: outputPoints.map((p) => colorForTask(p.task_id, 0.95)),
@@ -611,30 +834,112 @@
           },
         },
       ];
+      return { traces, points, nPairs: allPairs.length };
+    }
 
-      const title =
-        taskIds.length === 1
-          ? `Input → output mapping for task ${taskIds[0]}`
-          : `Input → output mapping for ${taskIds.length} tasks`;
-
-      const layout = layoutBase(`${title} (dashed = pair link)`);
+    async function plotPairs(plotId, data, taskIds, title) {
+      if (!taskIds.length) {
+        await Plotly.newPlot(plotId, [], layoutBase("Select one or more tasks"), {
+          responsive: true,
+          displayModeBar: true,
+        });
+        bindHover(plotId, []);
+        return 0;
+      }
+      const allPairs = taskIds.flatMap((id) => trainPairsForTask(id, data));
+      const { traces, points, nPairs } = buildPairTraces(allPairs, taskIds);
+      const layout = layoutBase(title);
       layout.annotations = [
         {
           text: "circle = input · diamond = output · color = task_id",
           xref: "paper",
           yref: "paper",
           x: 0,
-          y: 1.08,
+          y: 1.1,
           showarrow: false,
-          font: { size: 11, color: "#8b95a8" },
+          font: { size: 10, color: "#8b95a8" },
         },
       ];
-
-      await Plotly.newPlot("plot-pairs", traces, layout, {
+      await Plotly.newPlot(plotId, traces, layout, {
         responsive: true,
         displayModeBar: true,
       });
-      bindHover("plot-pairs", state.pairsPoints);
+      bindHover(plotId, points);
+      return nPairs;
+    }
+
+    async function renderPairs() {
+      updateCompareVisibility("pairs");
+      const taskIds = selectedTaskIds();
+      const ids = paneSourceIds("pairs");
+      const plotIds = ensurePanes("pairs-plot-row", ids);
+      const pairCounts = await Promise.all(
+        ids.map((sourceId, i) =>
+          plotPairs(
+            plotIds[i],
+            state.datasets[sourceId],
+            taskIds,
+            `${sourceLabel(sourceId)} mapping`
+          )
+        )
+      );
+      const labels = ids.map((id) => sourceLabel(id)).join(" | ");
+      document.getElementById("pairs-count").textContent = !taskIds.length
+        ? "No tasks selected"
+        : ids.length > 1
+          ? `${taskIds.length} tasks · ${pairCounts[0]} pairs · compare: ${labels}`
+          : `${taskIds.length} tasks · ${pairCounts[0]} pairs · ${labels}`;
+    }
+
+    async function plotTrajectories(plotId, data, title) {
+      const points = data.points || [];
+      await plotScatter(plotId, points, title, {
+        hoverText: (p) =>
+          `${p.task_id} · ${p.pair_type} #${p.pair_index} · |Δ|=${p.magnitude}`,
+      });
+      return points.length;
+    }
+
+    async function renderTrajectories() {
+      updateCompareVisibility("traj");
+      const ids = paneSourceIds("traj");
+      if (!ids.length) {
+        document.getElementById("traj-count").textContent =
+          "No trajectories — re-run viewer --precompute";
+        ensurePanes("traj-plot-row", []);
+        return;
+      }
+      const plotIds = ensurePanes("traj-plot-row", ids, "trajectories");
+      const counts = await Promise.all(
+        ids.map((sourceId, i) =>
+          plotTrajectories(
+            plotIds[i],
+            state.trajDatasets[sourceId],
+            `${sourceLabel(sourceId, "trajectories")} · Δ (out − in) → PCA → t-SNE`
+          )
+        )
+      );
+      const labels = ids.map((id) => sourceLabel(id, "trajectories")).join(" | ");
+      document.getElementById("traj-count").textContent = ids.length > 1
+        ? `${counts[0]?.toLocaleString() ?? 0} pairs · compare: ${labels}`
+        : `${counts[0]?.toLocaleString() ?? 0} pairs · ${labels}`;
+    }
+
+    function setTab(tab) {
+      state.tab = tab;
+      hidePreview();
+      document.querySelectorAll(".tab").forEach((el) => {
+        el.classList.toggle("active", el.dataset.tab === tab);
+      });
+      document.getElementById("panel-grids").classList.toggle("active", tab === "grids");
+      document.getElementById("panel-pairs").classList.toggle("active", tab === "pairs");
+      document.getElementById("panel-traj").classList.toggle("active", tab === "traj");
+      document.getElementById("toolbar-grids").classList.toggle("visible", tab === "grids");
+      document.getElementById("toolbar-pairs").classList.toggle("visible", tab === "pairs");
+      document.getElementById("toolbar-traj").classList.toggle("visible", tab === "traj");
+      if (tab === "grids") renderGrids();
+      else if (tab === "pairs") renderPairs();
+      else renderTrajectories();
     }
 
     function applyTaskFilter() {
@@ -645,10 +950,12 @@
       }
     }
 
-    function populateControls(data) {
-      const splits = [...new Set(data.points.map((p) => p.split))].sort();
+    function populateTaskControls(primaryData) {
+      const splits = [...new Set(primaryData.points.map((p) => p.split))].sort();
       const splitSelect = document.getElementById("split-filter");
+      const existing = new Set([...splitSelect.options].map((o) => o.value));
       for (const s of splits) {
+        if (existing.has(s)) continue;
         const opt = document.createElement("option");
         opt.value = s;
         opt.textContent = s;
@@ -656,62 +963,147 @@
       }
 
       state.taskPairCounts = new Map(
-        data.task_ids.map((id) => [id, trainPairsForTask(id).length])
+        primaryData.task_ids.map((id) => [
+          id,
+          trainPairsForTask(id, primaryData).length,
+        ])
       );
-
       const taskSelect = document.getElementById("task-select");
       taskSelect.innerHTML = "";
-      for (const id of data.task_ids) {
+      for (const id of primaryData.task_ids) {
         const opt = document.createElement("option");
         opt.value = id;
         opt.textContent = `${id} (${state.taskPairCounts.get(id)} pairs)`;
         taskSelect.appendChild(opt);
       }
-      if (taskSelect.options.length) {
-        taskSelect.options[0].selected = true;
-      }
+      if (taskSelect.options.length) taskSelect.options[0].selected = true;
+    }
 
-      const m = data.meta;
-      const gridNote = m.has_grids ? "" : " · grids missing (re-run --precompute)";
+    function updateMeta() {
+      const primary = state.datasets.structural || Object.values(state.datasets)[0];
+      if (!primary) return;
+      const m = primary.meta;
+      const ready = availableSources().map((s) => s.id).join(", ");
+      const trajReady = availableTrajSources().map((s) => s.id).join(", ");
       document.getElementById("meta").textContent =
         `${m.n_points.toLocaleString()} grids · ${m.n_tasks.toLocaleString()} tasks · ` +
-        `${m.method} · pca=${m.pca_dims} · perplexity=${m.perplexity} · ` +
-        `splits=${m.splits.join(",")}${gridNote}`;
+        `sources: ${ready || "none"} · traj: ${trajReady || "none"} · ` +
+        `pca=${m.pca_dims} · perplexity=${m.perplexity}`;
+    }
+
+    function resizeActivePlots() {
+      hidePreview();
+      const rowId =
+        state.tab === "grids"
+          ? "grids-plot-row"
+          : state.tab === "pairs"
+            ? "pairs-plot-row"
+            : "traj-plot-row";
+      const row = document.getElementById(rowId);
+      for (const plot of row.querySelectorAll(".plot")) {
+        if (plot.id) Plotly.Plots.resize(plot.id);
+      }
+    }
+
+    async function loadCatalog(url) {
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const payload = await res.json();
+      return payload.sources || [];
+    }
+
+    async function loadSources() {
+      state.sources = await loadCatalog("/data/sources.json");
+      if (!state.sources.length) {
+        throw new Error("Failed to load embedding sources");
+      }
+
+      await Promise.all(
+        state.sources
+          .filter((s) => s.available)
+          .map(async (s) => {
+            const res = await fetch(s.url);
+            if (!res.ok) {
+              s.available = false;
+              return;
+            }
+            state.datasets[s.id] = await res.json();
+            if (s.id === "dinov3" && state.datasets[s.id].meta?.dino_model) {
+              const model = state.datasets[s.id].meta.dino_model.split("/").pop();
+              s.label = `DINOv3 (${model})`;
+            }
+          })
+      );
+
+      if (!availableSources().length) {
+        throw new Error("No embedding sources available");
+      }
+
+      state.trajSources = await loadCatalog("/data/trajectories.json");
+      await Promise.all(
+        state.trajSources
+          .filter((s) => s.available)
+          .map(async (s) => {
+            const res = await fetch(s.url);
+            if (!res.ok) {
+              s.available = false;
+              return;
+            }
+            state.trajDatasets[s.id] = await res.json();
+            if (s.id === "dinov3" && state.trajDatasets[s.id].meta?.dino_model) {
+              const model = state.trajDatasets[s.id].meta.dino_model.split("/").pop();
+              s.label = `DINOv3 (${model})`;
+            }
+          })
+      );
     }
 
     async function main() {
       try {
-        const res = await fetch("/data/tsne.json");
-        if (!res.ok) throw new Error(`Failed to load data (${res.status})`);
-        state.data = await res.json();
-        populateControls(state.data);
+        await loadSources();
+        const primary =
+          state.datasets.structural || state.datasets[availableSources()[0].id];
+        populateTaskControls(primary);
+        syncSourceControls();
+        updateMeta();
 
         document.querySelectorAll(".tab").forEach((btn) => {
           btn.addEventListener("click", () => setTab(btn.dataset.tab));
         });
+
+        for (const prefix of ["grids", "pairs", "traj"]) {
+          const render =
+            prefix === "grids"
+              ? renderGrids
+              : prefix === "pairs"
+                ? renderPairs
+                : renderTrajectories;
+          for (const suffix of ["embedding", "split", "left", "right"]) {
+            document
+              .getElementById(`${prefix}-${suffix}`)
+              .addEventListener("change", render);
+          }
+        }
+
         document.getElementById("split-filter").addEventListener("change", renderGrids);
         document.getElementById("pair-type-filter").addEventListener("change", renderGrids);
         document.getElementById("task-select").addEventListener("change", renderPairs);
         document.getElementById("task-filter").addEventListener("input", applyTaskFilter);
         document.getElementById("task-clear").addEventListener("click", () => {
-          const select = document.getElementById("task-select");
-          for (const opt of select.options) opt.selected = false;
+          for (const opt of document.getElementById("task-select").options) {
+            opt.selected = false;
+          }
           renderPairs();
         });
         document.getElementById("task-select-visible").addEventListener("click", () => {
-          const select = document.getElementById("task-select");
-          for (const opt of select.options) {
+          for (const opt of document.getElementById("task-select").options) {
             if (!opt.hidden) opt.selected = true;
           }
           renderPairs();
         });
 
         renderGrids();
-        window.addEventListener("resize", () => {
-          hidePreview();
-          if (state.tab === "grids") Plotly.Plots.resize("plot-grids");
-          else Plotly.Plots.resize("plot-pairs");
-        });
+        window.addEventListener("resize", resizeActivePlots);
       } catch (err) {
         document.getElementById("meta").innerHTML =
           `<span class="error">${err.message}. Run: uv run python main.py viewer --precompute</span>`;

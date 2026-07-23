@@ -10,8 +10,18 @@ import fiftyone as fo
 from arc_fiftyone.analyze import run_analysis
 from arc_fiftyone.curation import CurationConfig, run_curation
 from arc_fiftyone.dataset import DEFAULT_DATASET_NAME, load_arc_dataset
+from arc_viewer.dino import DEFAULT_DINO_MODEL
+from arc_viewer.precompute import DEFAULT_DINO_EMB
+from arc_viewer.precompute import DEFAULT_DINO_OUTPUT as VIEWER_DEFAULT_DINO_OUTPUT
 from arc_viewer.precompute import DEFAULT_OUTPUT as VIEWER_DEFAULT_OUTPUT
-from arc_viewer.precompute import precompute_tsne
+from arc_viewer.precompute import DEFAULT_STRUCTURAL_EMB
+from arc_viewer.precompute import DEFAULT_TRAJ_DINO
+from arc_viewer.precompute import DEFAULT_TRAJ_STRUCTURAL
+from arc_viewer.precompute import (
+    precompute_dino_tsne,
+    precompute_trajectories_from_saved,
+    precompute_tsne,
+)
 from arc_viewer.serve import serve_viewer
 
 
@@ -150,12 +160,50 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=VIEWER_DEFAULT_OUTPUT,
-        help="Path for precomputed t-SNE JSON",
+        help="Path for structural t-SNE JSON",
+    )
+    viewer_parser.add_argument(
+        "--dino-output",
+        type=Path,
+        default=VIEWER_DEFAULT_DINO_OUTPUT,
+        help="Path for DINOv3 t-SNE JSON",
+    )
+    viewer_parser.add_argument(
+        "--embedding",
+        choices=("structural", "dinov3", "all"),
+        default="structural",
+        help=(
+            "Which embedding space(s) to precompute. "
+            "DINOv3 is only computed for dinov3/all when missing or --precompute "
+            "(gated HF weights; not downloaded on plain serve)."
+        ),
+    )
+    viewer_parser.add_argument(
+        "--dino-model",
+        default=DEFAULT_DINO_MODEL,
+        help="Hugging Face DINOv3 model id",
+    )
+    viewer_parser.add_argument(
+        "--dino-batch-size",
+        type=int,
+        default=32,
+        help="Batch size for DINOv3 inference",
+    )
+    viewer_parser.add_argument(
+        "--dino-cell-size",
+        type=int,
+        default=16,
+        help="Pixels per ARC cell when rendering images for DINOv3",
+    )
+    viewer_parser.add_argument(
+        "--device",
+        default=None,
+        help="Torch device for DINOv3 (default: cuda if available else cpu)",
     )
     viewer_parser.add_argument(
         "--precompute",
         action="store_true",
-        help="Recompute t-SNE even if output already exists",
+        help="Recompute selected embeddings even if outputs already exist",
     )
     viewer_parser.add_argument(
         "--precompute-only",
@@ -271,28 +319,84 @@ def main() -> None:
         return
 
     if args.command == "viewer":
-        needs_precompute = (
-            args.precompute
-            or args.precompute_only
-            or not args.output.is_file()
-        )
-        if needs_precompute:
-            precompute_tsne(
-                data_dir=args.data_dir,
-                splits=_split_tuple(args.split),
-                output=args.output,
+        want_structural = args.embedding in ("structural", "all")
+        want_dino = args.embedding in ("dinov3", "all")
+        force = args.precompute or args.precompute_only
+
+        if want_structural:
+            if force or not args.output.is_file():
+                precompute_tsne(
+                    data_dir=args.data_dir,
+                    splits=_split_tuple(args.split),
+                    output=args.output,
+                    perplexity=args.perplexity,
+                    pca_dims=args.pca_dims,
+                    seed=args.seed,
+                )
+            else:
+                print(f"Using existing {args.output.resolve()}")
+
+        if want_dino:
+            # Never auto-download gated DINOv3 weights on a plain `viewer` serve.
+            # Compute only when --embedding dinov3|all and (missing or --precompute*).
+            should_dino = args.embedding in ("dinov3", "all") and (
+                force or not args.dino_output.is_file()
+            )
+            # For --embedding all without --precompute, skip creating missing dino data.
+            if args.embedding == "all" and not force and not args.dino_output.is_file():
+                should_dino = False
+
+            if should_dino:
+                precompute_dino_tsne(
+                    data_dir=args.data_dir,
+                    splits=_split_tuple(args.split),
+                    output=args.dino_output,
+                    model_name=args.dino_model,
+                    batch_size=args.dino_batch_size,
+                    cell_size=args.dino_cell_size,
+                    device=args.device,
+                    perplexity=args.perplexity,
+                    pca_dims=args.pca_dims,
+                    seed=args.seed,
+                )
+            elif args.dino_output.is_file():
+                print(f"Using existing {args.dino_output.resolve()}")
+            else:
+                print(
+                    f"DINOv3 data not found at {args.dino_output} "
+                    "(run: uv run python main.py viewer --embedding dinov3 --precompute-only)"
+                )
+
+        # Rebuild missing trajectory JSONs from saved raw embeddings (no model reload).
+        if DEFAULT_STRUCTURAL_EMB.is_file() and not DEFAULT_TRAJ_STRUCTURAL.is_file():
+            precompute_trajectories_from_saved(
+                DEFAULT_STRUCTURAL_EMB,
+                output=DEFAULT_TRAJ_STRUCTURAL,
                 perplexity=args.perplexity,
                 pca_dims=args.pca_dims,
                 seed=args.seed,
             )
-        else:
-            print(f"Using existing {args.output.resolve()}")
+        if DEFAULT_DINO_EMB.is_file() and not DEFAULT_TRAJ_DINO.is_file():
+            precompute_trajectories_from_saved(
+                DEFAULT_DINO_EMB,
+                output=DEFAULT_TRAJ_DINO,
+                perplexity=args.perplexity,
+                pca_dims=args.pca_dims,
+                seed=args.seed,
+            )
 
         if args.precompute_only:
             return
 
+        if not args.output.is_file():
+            raise SystemExit(
+                f"Structural viewer data not found at {args.output}. "
+                "Run with --embedding structural|all --precompute first."
+            )
+
         serve_viewer(
             data_path=args.output,
+            dino_data_path=args.dino_output,
             port=args.viewer_port,
             open_browser=not args.no_open,
         )
