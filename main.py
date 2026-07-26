@@ -21,6 +21,7 @@ from arc_viewer.precompute import (
     precompute_dino_tsne,
     precompute_trajectories_from_saved,
     precompute_tsne,
+    ensure_clusters_on_trajectory_json,
 )
 from arc_viewer.serve import serve_viewer
 
@@ -383,6 +384,24 @@ def main() -> None:
                 perplexity=args.perplexity,
                 pca_dims=args.pca_dims,
                 seed=args.seed,
+            )
+
+        # Attach Δ-PCA clustering labels to trajectory JSONs (no t-SNE redo).
+        if DEFAULT_TRAJ_STRUCTURAL.is_file() and DEFAULT_STRUCTURAL_EMB.is_file():
+            ensure_clusters_on_trajectory_json(
+                DEFAULT_TRAJ_STRUCTURAL,
+                DEFAULT_STRUCTURAL_EMB,
+                pca_dims=args.pca_dims,
+                seed=args.seed,
+                force=False,
+            )
+        if DEFAULT_TRAJ_DINO.is_file() and DEFAULT_DINO_EMB.is_file():
+            ensure_clusters_on_trajectory_json(
+                DEFAULT_TRAJ_DINO,
+                DEFAULT_DINO_EMB,
+                pca_dims=args.pca_dims,
+                seed=args.seed,
+                force=False,
             )
 
         if args.precompute_only:

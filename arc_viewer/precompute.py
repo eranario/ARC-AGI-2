@@ -11,6 +11,12 @@ from sklearn.manifold import TSNE
 
 from arc_fiftyone.embeddings import compute_grid_embedding
 from arc_fiftyone.render import render_grid
+from arc_viewer.clustering import (
+    ClusterResult,
+    cluster_pca,
+    clustering_meta,
+    labels_by_point,
+)
 from arc_viewer.dino import DEFAULT_DINO_MODEL, embed_images, load_dinov3
 
 DEFAULT_OUTPUT = Path("artifacts/viewer/tsne.json")
@@ -210,28 +216,47 @@ def compute_io_deltas(
     return pair_records, np.stack(deltas, axis=0)
 
 
+def run_pca(
+    embeddings: np.ndarray,
+    *,
+    pca_dims: int = 50,
+    seed: int = 42,
+) -> tuple[np.ndarray, int]:
+    """Reduce raw embeddings with PCA. Returns (features, n_components)."""
+    n, dim = embeddings.shape
+    if n == 0:
+        return np.zeros((0, 0), dtype=np.float64), 0
+    pca_dims = min(pca_dims, n - 1, dim)
+    print(f"Running PCA -> {pca_dims} dims...")
+    reduced = PCA(n_components=pca_dims, random_state=seed).fit_transform(
+        embeddings
+    )
+    return reduced, pca_dims
+
+
 def run_pca_tsne(
     embeddings: np.ndarray,
     *,
     perplexity: float = 30.0,
     pca_dims: int = 50,
     seed: int = 42,
-) -> tuple[np.ndarray, dict]:
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Return (tsne_2d, pca_features, meta)."""
     n, dim = embeddings.shape
     if n == 0:
-        return np.zeros((0, 2), dtype=np.float64), {
-            "method": "pca+tsne",
-            "pca_dims": 0,
-            "perplexity": 0.0,
-            "seed": seed,
-            "embedding_dim": int(dim),
-        }
+        return (
+            np.zeros((0, 2), dtype=np.float64),
+            np.zeros((0, 0), dtype=np.float64),
+            {
+                "method": "pca+tsne",
+                "pca_dims": 0,
+                "perplexity": 0.0,
+                "seed": seed,
+                "embedding_dim": int(dim),
+            },
+        )
 
-    pca_dims = min(pca_dims, n - 1, dim)
-    print(f"Running PCA -> {pca_dims} dims...")
-    reduced = PCA(n_components=pca_dims, random_state=seed).fit_transform(
-        embeddings
-    )
+    reduced, pca_dims = run_pca(embeddings, pca_dims=pca_dims, seed=seed)
 
     effective_perplexity = min(perplexity, max(5.0, (n - 1) / 3.0))
     print(
@@ -252,7 +277,7 @@ def run_pca_tsne(
         "seed": seed,
         "embedding_dim": int(dim),
     }
-    return coords, meta
+    return coords, reduced, meta
 
 
 def write_viewer_json(
@@ -263,27 +288,34 @@ def write_viewer_json(
     splits: tuple[str, ...],
     embedding_name: str,
     extra_meta: dict | None = None,
+    clusters: dict[str, ClusterResult] | None = None,
 ) -> Path:
     points = []
-    for record, (x, y) in zip(records, coords, strict=True):
-        points.append(
-            {
-                **record,
-                "x": round(float(x), 4),
-                "y": round(float(y), 4),
-            }
-        )
+    for i, (record, (x, y)) in enumerate(zip(records, coords, strict=True)):
+        point = {
+            **record,
+            "x": round(float(x), 4),
+            "y": round(float(y), 4),
+        }
+        if clusters:
+            point["clusters"] = labels_by_point(clusters, i)
+        points.append(point)
 
     task_ids = sorted({p["task_id"] for p in points if p["pair_type"] == "train"})
+    meta = {
+        "splits": list(splits),
+        "n_points": len(points),
+        "n_tasks": len(task_ids),
+        "embedding": embedding_name,
+        "has_grids": True,
+        **(extra_meta or {}),
+    }
+    if clusters:
+        meta["clustering"] = clustering_meta(
+            clusters, pca_dims=int(meta.get("pca_dims") or 0)
+        )
     payload = {
-        "meta": {
-            "splits": list(splits),
-            "n_points": len(points),
-            "n_tasks": len(task_ids),
-            "embedding": embedding_name,
-            "has_grids": True,
-            **(extra_meta or {}),
-        },
+        "meta": meta,
         "task_ids": task_ids,
         "points": points,
     }
@@ -303,30 +335,38 @@ def write_trajectory_json(
     splits: tuple[str, ...],
     embedding_name: str,
     extra_meta: dict | None = None,
+    clusters: dict[str, ClusterResult] | None = None,
 ) -> Path:
     """Write I/O delta trajectories projected to 2D."""
     points = []
-    for record, (x, y) in zip(pair_records, coords, strict=True):
-        points.append(
-            {
-                **record,
-                "x": round(float(x), 4),
-                "y": round(float(y), 4),
-            }
-        )
+    for i, (record, (x, y)) in enumerate(zip(pair_records, coords, strict=True)):
+        point = {
+            **record,
+            "x": round(float(x), 4),
+            "y": round(float(y), 4),
+        }
+        if clusters:
+            point["clusters"] = labels_by_point(clusters, i)
+        points.append(point)
 
     task_ids = sorted({p["task_id"] for p in points})
+    meta = {
+        "kind": "trajectories",
+        "splits": list(splits),
+        "n_points": len(points),
+        "n_tasks": len(task_ids),
+        "embedding": embedding_name,
+        "delta": "output_minus_input_raw",
+        "has_grids": True,
+        **(extra_meta or {}),
+    }
+    if clusters:
+        meta["clustering"] = clustering_meta(
+            clusters, pca_dims=int(meta.get("pca_dims") or 0)
+        )
+        meta["clustering"]["space"] = "pca_delta"
     payload = {
-        "meta": {
-            "kind": "trajectories",
-            "splits": list(splits),
-            "n_points": len(points),
-            "n_tasks": len(task_ids),
-            "embedding": embedding_name,
-            "delta": "output_minus_input_raw",
-            "has_grids": True,
-            **(extra_meta or {}),
-        },
+        "meta": meta,
         "task_ids": task_ids,
         "points": points,
     }
@@ -353,13 +393,14 @@ def precompute_trajectories(
     seed: int = 42,
     extra_meta: dict | None = None,
 ) -> Path:
-    """Build Δ=out−in in raw space, then PCA+t-SNE the deltas."""
+    """Build Δ=out−in in raw space, PCA+t-SNE the deltas, cluster on Δ PCA."""
     print("Computing raw input→output embedding deltas...")
     pair_records, deltas = compute_io_deltas(records, embeddings)
     print(f"  {len(pair_records)} train pairs, delta dim={deltas.shape[1]}")
-    coords, meta = run_pca_tsne(
+    coords, pca_features, meta = run_pca_tsne(
         deltas, perplexity=perplexity, pca_dims=pca_dims, seed=seed
     )
+    clusters = cluster_pca(pca_features, seed=seed)
     meta = {
         **meta,
         **(extra_meta or {}),
@@ -372,6 +413,7 @@ def precompute_trajectories(
         splits=splits,
         embedding_name=embedding_name,
         extra_meta=meta,
+        clusters=clusters,
     )
 
 
@@ -399,7 +441,7 @@ def precompute_tsne(
         embeddings,
         meta={"embedding": "structural_arc_embeddings", "splits": list(splits)},
     )
-    coords, meta = run_pca_tsne(
+    coords, _pca_features, meta = run_pca_tsne(
         embeddings, perplexity=perplexity, pca_dims=pca_dims, seed=seed
     )
     path = write_viewer_json(
@@ -461,7 +503,7 @@ def precompute_dino_tsne(
     save_raw_embeddings(
         embeddings_output, records, embeddings, meta=emb_meta
     )
-    coords, meta = run_pca_tsne(
+    coords, _pca_features, meta = run_pca_tsne(
         embeddings, perplexity=perplexity, pca_dims=pca_dims, seed=seed
     )
     meta = {**meta, **emb_meta}
@@ -510,3 +552,82 @@ def precompute_trajectories_from_saved(
         seed=seed,
         extra_meta={k: v for k, v in meta.items() if k != "splits"},
     )
+
+
+def _pair_point_key(point: dict) -> tuple:
+    return (
+        str(point["task_id"]),
+        str(point["split"]),
+        str(point["pair_type"]),
+        int(point["pair_index"]),
+    )
+
+
+def ensure_clusters_on_trajectory_json(
+    trajectory_json: Path | str,
+    embeddings_path: Path | str,
+    *,
+    pca_dims: int = 50,
+    seed: int = 42,
+    force: bool = False,
+) -> Path | None:
+    """Attach Δ-PCA cluster labels to an existing trajectory JSON (keep t-SNE).
+
+    Clustering is on raw (output − input) deltas → PCA, not grid embeddings.
+    """
+    trajectory_json = Path(trajectory_json)
+    embeddings_path = Path(embeddings_path)
+    if not trajectory_json.is_file() or not embeddings_path.is_file():
+        return None
+
+    payload = json.loads(trajectory_json.read_text())
+    clustering = payload.get("meta", {}).get("clustering") or {}
+    if (
+        not force
+        and clustering.get("space") == "pca_delta"
+        and clustering.get("methods")
+    ):
+        return trajectory_json.resolve()
+
+    records, embeddings, _meta = load_raw_embeddings(embeddings_path)
+    pair_records, deltas = compute_io_deltas(records, embeddings)
+    if not pair_records:
+        print(f"Skipping delta clusters for {trajectory_json.name}: no pairs")
+        return None
+
+    delta_index = {_pair_point_key(r): i for i, r in enumerate(pair_records)}
+    points = payload.get("points") or []
+    order: list[int] = []
+    for p in points:
+        key = _pair_point_key(p)
+        if key not in delta_index:
+            print(
+                f"Skipping delta clusters for {trajectory_json.name}: "
+                f"point key mismatch ({key})"
+            )
+            return None
+        order.append(delta_index[key])
+
+    ordered_deltas = deltas[np.asarray(order, dtype=np.int64)]
+    pca_features, used_dims = run_pca(ordered_deltas, pca_dims=pca_dims, seed=seed)
+    clusters = cluster_pca(pca_features, seed=seed)
+
+    for i, point in enumerate(points):
+        point["clusters"] = labels_by_point(clusters, i)
+
+    meta = payload.setdefault("meta", {})
+    meta["clustering"] = clustering_meta(clusters, pca_dims=used_dims)
+    meta["clustering"]["space"] = "pca_delta"
+    if "pca_dims" not in meta:
+        meta["pca_dims"] = used_dims
+
+    trajectory_json.write_text(json.dumps(payload, separators=(",", ":")))
+    print(
+        f"Updated Δ clusters on {trajectory_json.resolve()} "
+        f"({len(clusters)} methods, pca_dims={used_dims})"
+    )
+    return trajectory_json.resolve()
+
+
+# Back-compat alias — clustering now lives on trajectory (delta) JSON only.
+ensure_clusters_on_viewer_json = ensure_clusters_on_trajectory_json

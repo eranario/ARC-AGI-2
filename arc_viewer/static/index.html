@@ -233,6 +233,7 @@
       <button class="tab active" data-tab="grids">Grids in latent space</button>
       <button class="tab" data-tab="pairs">Input → output mapping</button>
       <button class="tab" data-tab="traj" id="tab-traj" hidden>I/O trajectories</button>
+      <button class="tab" data-tab="clusters" id="tab-clusters" hidden>Δ PCA clusters</button>
     </div>
 
     <div class="toolbar-stack">
@@ -302,6 +303,46 @@
         </div>
         <span class="chip" id="traj-count"></span>
       </div>
+
+      <div id="toolbar-clusters" class="toolbar row-center">
+        <label for="clusters-embedding">Embedding</label>
+        <select id="clusters-embedding"></select>
+        <label class="check-label" id="clusters-split-label" title="Needs at least 2 trajectory sources with Δ clusters">
+          <input type="checkbox" id="clusters-split" />
+          Split compare
+        </label>
+        <div class="compare-controls" id="clusters-compare-controls">
+          <label for="clusters-left">A</label>
+          <select id="clusters-left"></select>
+          <label for="clusters-right">B</label>
+          <select id="clusters-right"></select>
+        </div>
+        <label for="clusters-method">Method</label>
+        <select id="clusters-method"></select>
+        <label for="clusters-k">k</label>
+        <select id="clusters-k">
+          <option value="8">8</option>
+          <option value="16" selected>16</option>
+          <option value="32">32</option>
+        </select>
+        <label for="clusters-id">Clusters (multi-select)</label>
+        <select id="clusters-id" multiple size="8"></select>
+        <div class="task-picker-actions">
+          <button type="button" class="action" id="clusters-id-all">Select all</button>
+          <button type="button" class="action" id="clusters-id-clear">Clear</button>
+        </div>
+        <label for="clusters-split-filter">Split</label>
+        <select id="clusters-split-filter">
+          <option value="all">all</option>
+        </select>
+        <label for="clusters-pair-type">Pair type</label>
+        <select id="clusters-pair-type">
+          <option value="all">all</option>
+          <option value="train" selected>train</option>
+          <option value="test">test</option>
+        </select>
+        <span class="chip" id="clusters-count"></span>
+      </div>
     </div>
 
     <div class="panel-stack">
@@ -313,6 +354,9 @@
       </section>
       <section id="panel-traj" class="panel">
         <div class="plot-row" id="traj-plot-row"></div>
+      </section>
+      <section id="panel-clusters" class="panel">
+        <div class="plot-row" id="clusters-plot-row"></div>
       </section>
     </div>
   </div>
@@ -392,6 +436,30 @@
       const color = `hsla(${hashHue(taskId)}, 70%, 58%, ${alpha})`;
       state.colorCache.set(key, color);
       return color;
+    }
+
+    function colorForCluster(label, alpha = 0.85) {
+      const id = Number(label);
+      if (!Number.isFinite(id) || id < 0) {
+        return `hsla(0, 0%, 42%, ${alpha})`;
+      }
+      const key = `cluster:${id}:${alpha}`;
+      if (state.colorCache.has(key)) return state.colorCache.get(key);
+      const hue = (id * 47) % 360;
+      const color = `hsla(${hue}, 72%, 58%, ${alpha})`;
+      state.colorCache.set(key, color);
+      return color;
+    }
+
+    function sourcesWithClusters() {
+      return availableTrajSources().filter((s) => {
+        const clustering = state.trajDatasets[s.id]?.meta?.clustering;
+        return (
+          clustering?.space === "pca_delta" &&
+          Array.isArray(clustering?.methods) &&
+          clustering.methods.length > 0
+        );
+      });
     }
 
     function drawGridOn(ctx, canvas, grid) {
@@ -648,7 +716,174 @@
       if (!canTrajSplit) trajSplitBox.checked = false;
       updateCompareVisibility("traj");
 
+      const clusterAvail = sourcesWithClusters();
+      const canClusterSplit = clusterAvail.length >= 2;
+      fillSourceSelect(
+        document.getElementById("clusters-embedding"),
+        clusterAvail.length ? clusterAvail : state.trajSources,
+        state.trajDatasets
+      );
+      fillSourceSelect(
+        document.getElementById("clusters-left"),
+        clusterAvail,
+        state.trajDatasets,
+        { preferred: document.getElementById("clusters-left").value || clusterAvail[0]?.id }
+      );
+      fillSourceSelect(
+        document.getElementById("clusters-right"),
+        clusterAvail,
+        state.trajDatasets,
+        {
+          preferred:
+            document.getElementById("clusters-right").value ||
+            clusterAvail.find((s) => s.id !== clusterAvail[0]?.id)?.id ||
+            clusterAvail[1]?.id,
+        }
+      );
+      const clSplitLabel = document.getElementById("clusters-split-label");
+      const clSplitBox = document.getElementById("clusters-split");
+      clSplitLabel.classList.toggle("disabled", !canClusterSplit);
+      clSplitBox.disabled = !canClusterSplit;
+      if (!canClusterSplit) clSplitBox.checked = false;
+      updateCompareVisibility("clusters");
+      syncClusterMethodOptions();
+      syncClusterFilters();
+
       document.getElementById("tab-traj").hidden = trajAvail.length === 0;
+      document.getElementById("tab-clusters").hidden = clusterAvail.length === 0;
+    }
+
+    function syncClusterMethodOptions() {
+      const methodSelect = document.getElementById("clusters-method");
+      const kSelect = document.getElementById("clusters-k");
+      const prevMethod = methodSelect.value;
+      const prevK = kSelect.value;
+      const ids = paneSourceIds("clusters");
+      const metas = ids
+        .map((id) => state.trajDatasets[id]?.meta?.clustering)
+        .filter(Boolean);
+      if (!metas.length) {
+        methodSelect.innerHTML = "";
+        return;
+      }
+
+      // Prefer shared families / k_values across compared sources
+      let families = metas[0].families || [];
+      let kValues = metas[0].k_values || [8, 16, 32];
+      const methodSets = metas.map(
+        (m) => new Set((m.methods || []).map((x) => x.id))
+      );
+      if (!families.length) {
+        const fromMethods = (metas[0].methods || []).map((m) => ({
+          id: m.family || m.id,
+          label: m.label || m.id,
+        }));
+        const seen = new Set();
+        families = [];
+        for (const f of fromMethods) {
+          if (seen.has(f.id)) continue;
+          seen.add(f.id);
+          families.push(f);
+        }
+      }
+      // Keep families that have at least one method id present in every source
+      families = families.filter((f) =>
+        kValues.some((k) => methodSets.every((s) => s.has(`${f.id}_${k}`)))
+      );
+      kValues = kValues.filter((k) =>
+        families.some((f) => methodSets.every((s) => s.has(`${f.id}_${k}`)))
+      );
+
+      methodSelect.innerHTML = "";
+      for (const f of families) {
+        const opt = document.createElement("option");
+        opt.value = f.id;
+        opt.textContent = f.label;
+        methodSelect.appendChild(opt);
+      }
+      if ([...methodSelect.options].some((o) => o.value === prevMethod)) {
+        methodSelect.value = prevMethod;
+      } else if (methodSelect.options.length) {
+        methodSelect.value = methodSelect.options[0].value;
+      }
+
+      kSelect.innerHTML = "";
+      for (const k of kValues) {
+        const opt = document.createElement("option");
+        opt.value = String(k);
+        opt.textContent = String(k);
+        kSelect.appendChild(opt);
+      }
+      if ([...kSelect.options].some((o) => o.value === prevK)) {
+        kSelect.value = prevK;
+      } else if ([...kSelect.options].some((o) => o.value === "16")) {
+        kSelect.value = "16";
+      } else if (kSelect.options.length) {
+        kSelect.value = kSelect.options[0].value;
+      }
+
+      syncClusterIdOptions();
+    }
+
+    function selectedClusterMethodId() {
+      const family = document.getElementById("clusters-method").value;
+      const k = document.getElementById("clusters-k").value;
+      return family && k ? `${family}_${k}` : "";
+    }
+
+    /**
+     * Selected cluster ids.
+     * - null ⇒ show all (every option selected)
+     * - Set ⇒ filter to those ids
+     * - empty Set ⇒ show none
+     */
+    function selectedClusterIds() {
+      const select = document.getElementById("clusters-id");
+      const selected = [...select.selectedOptions].map((o) => Number(o.value));
+      if (!select.options.length) return new Set();
+      if (selected.length === select.options.length) return null;
+      return new Set(selected);
+    }
+
+    function syncClusterIdOptions() {
+      const select = document.getElementById("clusters-id");
+      const prev = new Set(
+        [...select.selectedOptions].map((o) => o.value)
+      );
+      const hadSelection = prev.size > 0;
+      const methodId = selectedClusterMethodId();
+      const k = Number(document.getElementById("clusters-k").value);
+      select.innerHTML = "";
+      if (!methodId || !Number.isFinite(k) || k <= 0) return;
+      for (let i = 0; i < k; i++) {
+        const opt = document.createElement("option");
+        opt.value = String(i);
+        opt.textContent = `cluster ${i}`;
+        // Preserve prior selection when possible; otherwise select all
+        opt.selected = hadSelection ? prev.has(String(i)) : true;
+        select.appendChild(opt);
+      }
+      // If k grew and nothing matched previous selection, select all
+      if (hadSelection && ![...select.options].some((o) => o.selected)) {
+        for (const opt of select.options) opt.selected = true;
+      }
+    }
+
+    function syncClusterFilters() {
+      const primary =
+        state.trajDatasets[paneSourceIds("clusters")[0]] ||
+        state.trajDatasets[sourcesWithClusters()[0]?.id];
+      if (!primary) return;
+      const splitSelect = document.getElementById("clusters-split-filter");
+      const existing = new Set([...splitSelect.options].map((o) => o.value));
+      const splits = [...new Set(primary.points.map((p) => p.split))].sort();
+      for (const s of splits) {
+        if (existing.has(s)) continue;
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        splitSelect.appendChild(opt);
+      }
     }
 
     function updateCompareVisibility(prefix) {
@@ -659,9 +894,13 @@
 
     /** Source ids currently shown as panes for a tab. Length >= 1. */
     function paneSourceIds(prefix) {
-      const isTraj = prefix === "traj";
-      const datasets = isTraj ? state.trajDatasets : state.datasets;
-      const fallback = isTraj ? availableTrajSources() : availableSources();
+      const isTrajLike = prefix === "traj" || prefix === "clusters";
+      const datasets = isTrajLike ? state.trajDatasets : state.datasets;
+      const fallback = prefix === "traj"
+        ? availableTrajSources()
+        : prefix === "clusters"
+          ? sourcesWithClusters()
+          : availableSources();
       if (document.getElementById(`${prefix}-split`).checked) {
         const left = document.getElementById(`${prefix}-left`).value;
         const right = document.getElementById(`${prefix}-right`).value;
@@ -691,7 +930,7 @@
       });
     }
 
-    async function plotScatter(plotId, points, title, { hoverText } = {}) {
+    async function plotScatter(plotId, points, title, { hoverText, colors } = {}) {
       const trace = {
         type: "scatter",
         mode: "markers",
@@ -709,7 +948,9 @@
         },
         marker: {
           size: 6,
-          color: points.map((p) => colorForTask(p.task_id, 0.75)),
+          color:
+            colors ||
+            points.map((p) => colorForTask(p.task_id, 0.75)),
           line: { width: 0 },
         },
         showlegend: false,
@@ -900,6 +1141,80 @@
       return points.length;
     }
 
+    function filteredClusterPoints(data, methodId) {
+      const split = document.getElementById("clusters-split-filter").value;
+      const pairType = document.getElementById("clusters-pair-type").value;
+      const clusterIds = selectedClusterIds();
+      return data.points.filter((p) => {
+        if (split !== "all" && p.split !== split) return false;
+        if (pairType !== "all" && p.pair_type !== pairType) return false;
+        if (clusterIds) {
+          const label = Number(p.clusters?.[methodId]);
+          if (!clusterIds.has(label)) return false;
+        }
+        return true;
+      });
+    }
+
+    async function plotClusters(plotId, data, methodId, title) {
+      const points = filteredClusterPoints(data, methodId);
+      const method =
+        (data.meta?.clustering?.methods || []).find((m) => m.id === methodId) ||
+        null;
+      const colors = points.map((p) =>
+        colorForCluster(p.clusters?.[methodId] ?? -1, 0.8)
+      );
+      await plotScatter(plotId, points, title, {
+        colors,
+        hoverText: (p) => {
+          const c = p.clusters?.[methodId];
+          const lab = c === undefined || c < 0 ? "noise" : `cluster ${c}`;
+          return `${p.task_id} · ${p.pair_type} #${p.pair_index} · |Δ|=${p.magnitude ?? "?"} · ${lab}`;
+        },
+      });
+      return {
+        n: points.length,
+        nClusters: method?.n_clusters ?? 0,
+        methodLabel: method?.label || methodId,
+      };
+    }
+
+    async function renderClusters() {
+      updateCompareVisibility("clusters");
+      syncClusterMethodOptions();
+      const ids = paneSourceIds("clusters");
+      const methodId = selectedClusterMethodId();
+      if (!ids.length || !methodId) {
+        document.getElementById("clusters-count").textContent =
+          "No Δ PCA clusters — re-run viewer (auto-attaches from saved embeddings)";
+        ensurePanes("clusters-plot-row", []);
+        return;
+      }
+      const plotIds = ensurePanes("clusters-plot-row", ids, "trajectories");
+      const clusterIds = selectedClusterIds();
+      const stats = await Promise.all(
+        ids.map((sourceId, i) =>
+          plotClusters(
+            plotIds[i],
+            state.trajDatasets[sourceId],
+            methodId,
+            `${sourceLabel(sourceId, "trajectories")} · Δ PCA ${methodId.replace("_", " k=")} → Δ t-SNE`
+          )
+        )
+      );
+      const labels = ids.map((id) => sourceLabel(id, "trajectories")).join(" | ");
+      const n = stats[0]?.n ?? 0;
+      const k = stats[0]?.nClusters ?? 0;
+      const filterTxt = clusterIds === null
+        ? `${k} clusters`
+        : !clusterIds.size
+          ? "no clusters selected"
+          : `clusters ${[...clusterIds].sort((a, b) => a - b).join(",")}`;
+      document.getElementById("clusters-count").textContent = ids.length > 1
+        ? `${n.toLocaleString()} pairs · ${filterTxt} · compare: ${labels}`
+        : `${n.toLocaleString()} pairs · ${filterTxt} · ${stats[0]?.methodLabel || methodId}`;
+    }
+
     async function renderTrajectories() {
       updateCompareVisibility("traj");
       const ids = paneSourceIds("traj");
@@ -934,12 +1249,15 @@
       document.getElementById("panel-grids").classList.toggle("active", tab === "grids");
       document.getElementById("panel-pairs").classList.toggle("active", tab === "pairs");
       document.getElementById("panel-traj").classList.toggle("active", tab === "traj");
+      document.getElementById("panel-clusters").classList.toggle("active", tab === "clusters");
       document.getElementById("toolbar-grids").classList.toggle("visible", tab === "grids");
       document.getElementById("toolbar-pairs").classList.toggle("visible", tab === "pairs");
       document.getElementById("toolbar-traj").classList.toggle("visible", tab === "traj");
+      document.getElementById("toolbar-clusters").classList.toggle("visible", tab === "clusters");
       if (tab === "grids") renderGrids();
       else if (tab === "pairs") renderPairs();
-      else renderTrajectories();
+      else if (tab === "traj") renderTrajectories();
+      else renderClusters();
     }
 
     function applyTaskFilter() {
@@ -998,7 +1316,9 @@
           ? "grids-plot-row"
           : state.tab === "pairs"
             ? "pairs-plot-row"
-            : "traj-plot-row";
+            : state.tab === "traj"
+              ? "traj-plot-row"
+              : "clusters-plot-row";
       const row = document.getElementById(rowId);
       for (const plot of row.querySelectorAll(".plot")) {
         if (plot.id) Plotly.Plots.resize(plot.id);
@@ -1071,19 +1391,48 @@
           btn.addEventListener("click", () => setTab(btn.dataset.tab));
         });
 
-        for (const prefix of ["grids", "pairs", "traj"]) {
+        for (const prefix of ["grids", "pairs", "traj", "clusters"]) {
           const render =
             prefix === "grids"
               ? renderGrids
               : prefix === "pairs"
                 ? renderPairs
-                : renderTrajectories;
+                : prefix === "traj"
+                  ? renderTrajectories
+                  : renderClusters;
           for (const suffix of ["embedding", "split", "left", "right"]) {
             document
               .getElementById(`${prefix}-${suffix}`)
-              .addEventListener("change", render);
+              .addEventListener("change", () => {
+                if (prefix === "clusters") syncClusterMethodOptions();
+                render();
+              });
           }
         }
+
+        document.getElementById("clusters-method").addEventListener("change", () => {
+          syncClusterIdOptions();
+          renderClusters();
+        });
+        document.getElementById("clusters-k").addEventListener("change", () => {
+          syncClusterIdOptions();
+          renderClusters();
+        });
+        document.getElementById("clusters-id").addEventListener("change", renderClusters);
+        document.getElementById("clusters-id-all").addEventListener("click", () => {
+          for (const opt of document.getElementById("clusters-id").options) {
+            opt.selected = true;
+          }
+          renderClusters();
+        });
+        document.getElementById("clusters-id-clear").addEventListener("click", () => {
+          for (const opt of document.getElementById("clusters-id").options) {
+            opt.selected = false;
+          }
+          renderClusters();
+        });
+        document.getElementById("clusters-split-filter").addEventListener("change", renderClusters);
+        document.getElementById("clusters-pair-type").addEventListener("change", renderClusters);
 
         document.getElementById("split-filter").addEventListener("change", renderGrids);
         document.getElementById("pair-type-filter").addEventListener("change", renderGrids);

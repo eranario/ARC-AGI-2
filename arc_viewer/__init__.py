@@ -5,6 +5,7 @@ from arc_viewer.precompute import (
     DEFAULT_OUTPUT,
     DEFAULT_TRAJ_DINO,
     DEFAULT_TRAJ_STRUCTURAL,
+    ensure_clusters_on_trajectory_json,
     precompute_dino_tsne,
     precompute_tsne,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "DEFAULT_TRAJ_DINO",
     "precompute_tsne",
     "precompute_dino_tsne",
+    "ensure_clusters_on_trajectory_json",
     "discover_sources",
     "discover_trajectories",
 ]
